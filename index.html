@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mocha Poker shuffle verifier</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Mocha Poker shuffle verifier</h1>
+  <p class="lead">Every deck at a Mocha Poker table is fixed by a secret server seed and by seeds that the players’ browsers add. This page re-does the shuffle from those seeds and tells you whether it gets the same deck. It does not talk to the site, and the code is short enough to read: <a href="verify.js">verify.js</a>.</p>
+
+  <section id="selftest" class="card" aria-live="polite">
+    <h2>Self-test</h2>
+    <p id="selftest-status" class="status wait">Running the three test vectors from the spec…</p>
+    <ul id="selftest-list" class="checks"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Check hands</h2>
+    <p>In the app, open <b>History</b> and press <b>Copy fairness data</b> (or <b>Download all hands</b>), then paste it here or choose the file. One hand, a list of hands, or a whole session all work.</p>
+    <label for="data">Fairness data (JSON)</label>
+    <textarea id="data" rows="8" spellcheck="false" placeholder='{"format":"mochapoker-fairness", ...}'></textarea>
+    <div class="row">
+      <label class="filebtn">Choose a file…<input id="file" type="file" accept=".json,application/json,text/plain"></label>
+      <button id="example" type="button" class="ghost">Try an example</button>
+    </div>
+    <label for="myseed">My seed (optional)</label>
+    <input id="myseed" type="text" spellcheck="false" autocomplete="off" placeholder="32 hex characters, if you kept your own client seed">
+    <button id="check" type="button" class="primary">Verify</button>
+    <p id="error" class="error" role="alert" hidden></p>
+  </section>
+
+  <section id="results" aria-live="polite"></section>
+
+  <section class="card small">
+    <h2>What does “✓” mean?</h2>
+    <p>The server committed to a hash before the hand. After the hand it revealed the seed behind that hash. If the hash matches and the deck comes out the same, the server could not have picked the cards after seeing anyone’s seed. To be sure the hash is the one you saw <i>before</i> the deal, compare the commitment shown for each hand with what your table displayed, or rely on the copy your own browser stored (included in the export as <code>youSaw</code>). The full rules are in <a href="FAIRNESS.md">FAIRNESS.md</a>.</p>
+  </section>
+</main>
+<script src="verify.js"></script>
+<script>
+(function () {
+  "use strict";
+  const V = window.MochaVerify;
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+
+  async function runSelfTest() {
+    const status = $("selftest-status"), list = $("selftest-list");
+    try {
+      const r = await V.selfTest();
+      for (const t of r.results) list.appendChild(el("li", t.ok ? "ok" : "bad", (t.ok ? "✓ " : "✗ ") + t.name + (t.ok ? ": hash and deck match" : ": does not match the spec")));
+      status.className = "status " + (r.ok ? "ok" : "bad");
+      status.textContent = r.ok ? "Self-test ✓ This page reproduces all three published test vectors." : "Self-test ✗ This browser does not reproduce the test vectors. Do not trust the results below.";
+    } catch (e) {
+      status.className = "status bad";
+      status.textContent = "Self-test ✗ " + e.message + " (WebCrypto may be unavailable; try a current browser).";
+    }
+  }
+
+  function render(results) {
+    const box = $("results");
+    box.textContent = "";
+    const good = results.filter((r) => r.ok).length;
+    const sum = el("p", "summary " + (good === results.length ? "ok" : "bad"),
+      good === results.length ? "✓ All " + results.length + " hand" + (results.length === 1 ? "" : "s") + " verified" : "✗ " + (results.length - good) + " of " + results.length + " hands failed");
+    box.appendChild(sum);
+    for (const r of results) {
+      const card = el("article", "card hand " + (r.ok ? "ok" : "bad"));
+      card.appendChild(el("h3", "", (r.ok ? "✓" : "✗") + " Hand #" + r.handNumber + (r.tableId ? " · table " + r.tableId : "")));
+      if (r.commitment) {
+        const c = el("p", "commit");
+        c.appendChild(el("span", "", "Commitment hash "));
+        c.appendChild(el("code", "", r.commitment));
+        card.appendChild(c);
+      }
+      const ul = el("ul", "checks");
+      for (const c of r.checks) {
+        const li = el("li", c.ok ? "ok" : "bad");
+        li.appendChild(el("b", "", (c.ok ? "✓ " : "✗ ") + c.label));
+        li.appendChild(el("span", "detail", c.detail));
+        ul.appendChild(li);
+      }
+      card.appendChild(ul);
+      box.appendChild(card);
+    }
+  }
+
+  async function verify() {
+    const err = $("error");
+    err.hidden = true;
+    $("results").textContent = "";
+    try {
+      const text = $("data").value.trim();
+      if (!text) throw new Error("Paste the fairness data first, or choose a file.");
+      const seed = $("myseed").value.trim();
+      if (seed && !/^[0-9a-fA-F]{32}$/.test(seed)) throw new Error("A client seed is 32 hex characters (0-9, a-f).");
+      render(await V.verifyAll(text, seed));
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    }
+  }
+
+  function example() {
+    const v = V.VECTORS[2];
+    $("data").value = JSON.stringify({
+      format: "mochapoker-fairness", version: 1, tableId: "abc123",
+      hands: [{
+        tableId: "abc123", handNumber: 42, algorithm: "mochapoker-v1", serverSeed: v.seed, serverSeedHash: v.hash,
+        clientSeeds: { amy: "22222222222222222222222222222222", bob: "33333333333333333333333333333333", zed: "11111111111111111111111111111111" },
+        material: v.material, deck: v.deck.split(" "),
+      }],
+    }, null, 2);
+  }
+
+  $("check").addEventListener("click", verify);
+  $("example").addEventListener("click", example);
+  $("file").addEventListener("change", (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { $("data").value = String(reader.result); verify(); };
+    reader.readAsText(f);
+  });
+  runSelfTest();
+})();
+</script>
+</body>
+</html>
